@@ -5,20 +5,40 @@ import base64
 import time
 
 import anthropic
+import httpx
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from cb1 import config
 from cb1.costs import CostLedger
+
+# transient network failures worth retrying; NOT 4xx API errors
+TRANSIENT = (
+    httpx.ReadTimeout,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+)
 
 
 class Client:
     def __init__(self, ledger: CostLedger | None = None, backend: str | None = None):
         self.backend = backend or config.BACKEND
+        # explicit read timeout: a stream that goes silent for 2 minutes
+        # (e.g. connection orphaned by a laptop sleep) must DIE and retry,
+        # not hang the pipeline for hours
+        timeout = httpx.Timeout(connect=15, read=120, write=30, pool=15)
         if self.backend == "bedrock":
             self._client = anthropic.AnthropicBedrock(
-                aws_region=config.AWS_REGION, max_retries=5
+                aws_region=config.AWS_REGION, max_retries=5, timeout=timeout
             )
         else:
-            self._client = anthropic.Anthropic(max_retries=5)
+            self._client = anthropic.Anthropic(max_retries=5, timeout=timeout)
         self.ledger = ledger or CostLedger()
         self.last_usage: dict = {}
 
@@ -29,6 +49,12 @@ class Client:
             return config.BEDROCK_MODEL_IDS[model]
         return model
 
+    @retry(
+        retry=retry_if_exception_type(TRANSIENT),
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=2, max=60),
+        reraise=True,
+    )
     def message(
         self,
         stage: str,
@@ -49,7 +75,10 @@ class Client:
         )
         if system is not None:
             kwargs["system"] = system
-        resp = self._client.messages.create(**kwargs)
+        # stream + collect: the SDK refuses non-streaming requests whose
+        # worst-case duration exceeds 10 minutes (max_tokens >= ~16k)
+        with self._client.messages.stream(**kwargs) as s:
+            resp = s.get_final_message()
         u = resp.usage
         cost = self.ledger.record(
             stage=stage,
