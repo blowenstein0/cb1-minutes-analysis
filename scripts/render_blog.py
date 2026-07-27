@@ -91,10 +91,16 @@ def main() -> None:
     ]
 
     # mute all stdout: code is hidden (echo: false), so stray prints would
-    # float context-free; figures are display_data and unaffected
-    for c in nb.cells:
+    # float context-free; figures are display_data and unaffected.
+    # error outputs are stripped too (never ship a traceback), but loudly.
+    for i, c in enumerate(nb.cells):
         if c.cell_type == "code":
-            c.outputs = [o for o in c.outputs if o.output_type != "stream"]
+            for o in c.outputs:
+                if o.output_type == "error":
+                    print(f"WARNING: cell {i} has a stored {o.ename} — output "
+                          f"suppressed; re-run the cell in Jupyter to fix")
+            c.outputs = [o for o in c.outputs
+                         if o.output_type not in ("stream", "error")]
 
     fm = FRONT_MATTER.format(
         title=title,
