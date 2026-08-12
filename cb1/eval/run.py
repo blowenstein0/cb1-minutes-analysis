@@ -23,10 +23,7 @@ from cb1.extract import (
     finalize,
     parse_llm_extraction,
 )
-
-
-def _load_meetings() -> dict:
-    return json.loads((config.DATA_DIR / "meetings.json").read_text())["meetings"]
+from cb1.identify import load_meetings
 
 
 def _cache_path(meeting_id: str):
@@ -64,7 +61,7 @@ def run_eval(client=None) -> int:
         )
         return 1
 
-    meetings = _load_meetings()
+    meetings = load_meetings()
     per_meeting = {}
     for gpath in goldens:
         golden = json.loads(gpath.read_text())
@@ -79,7 +76,7 @@ def run_eval(client=None) -> int:
 
 def draft_golden(meeting_id: str, client) -> None:
     """Produce a draft extraction for hand-correction into golden truth."""
-    meetings = _load_meetings()
+    meetings = load_meetings()
     if meeting_id not in meetings:
         raise SystemExit(f"unknown meeting id {meeting_id}")
     extracted = extract_for_eval(meetings[meeting_id], client)

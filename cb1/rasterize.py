@@ -13,8 +13,14 @@ JPEG_QUALITY = 80
 FALLBACK_DPIS = (110, 80, 60)
 
 
+def page_jpeg_path(sha256: str, page_no: int, dpi: int = config.RASTER_DPI):
+    """Cache path page_jpeg writes to (keyed on the REQUESTED dpi, even when
+    the render falls back to a lower one)."""
+    return config.INTERIM_DIR / "img" / f"{sha256}-p{page_no:03d}-{dpi}.jpg"
+
+
 def page_jpeg(pdf_path, sha256: str, page_no: int, dpi: int = config.RASTER_DPI) -> bytes:
-    cache = config.INTERIM_DIR / "img" / f"{sha256}-p{page_no:03d}-{dpi}.jpg"
+    cache = page_jpeg_path(sha256, page_no, dpi)
     if cache.exists():
         return cache.read_bytes()
     with fitz.open(pdf_path) as doc:

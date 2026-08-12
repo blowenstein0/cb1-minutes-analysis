@@ -135,7 +135,6 @@ class MeetingExtraction(BaseModel):
     public_speakers: list[PublicSpeaker] = Field(default_factory=list)
     traffic_incidents: list[TrafficIncident] = Field(default_factory=list)
     cannabis_licenses: list[CannabisLicense] = Field(default_factory=list)
-    government_announcements: list[GovernmentAnnouncement] = Field(default_factory=list)
     extraction_meta: ExtractionMeta
 
 
@@ -149,6 +148,13 @@ class LLMExtraction(BaseModel):
     traffic_incidents: list[TrafficIncident] = Field(default_factory=list)
     cannabis_licenses: list[CannabisLicense] = Field(default_factory=list)
     government_announcements: list[GovernmentAnnouncement] = Field(default_factory=list)
+
+
+def strip_fences(raw: str) -> str:
+    """Remove the markdown code fences the model sometimes wraps JSON in."""
+    raw = raw.strip()
+    raw = re.sub(r"^```(json)?\s*", "", raw)
+    return re.sub(r"\s*```$", "", raw)
 
 
 def format_validation_error(raw: str, error: Exception) -> str:

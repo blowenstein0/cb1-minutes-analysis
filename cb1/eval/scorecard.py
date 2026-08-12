@@ -60,8 +60,7 @@ def score_meeting(golden: dict, extracted: dict) -> dict:
                         f"{entity}[{gi}].{f}: golden={g_list[gi].get(f)!r} "
                         f"extracted={e_list[ei].get(f)!r}"
                     )
-        if entity == "votes":
-            for gi, ei, _score in matches:
+            if entity == "votes":
                 out["tally_total"] += 1
                 out["tally_exact"] += tallies_exact(g_list[gi], e_list[ei])
 

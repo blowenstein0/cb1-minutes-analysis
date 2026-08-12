@@ -149,7 +149,7 @@ def main() -> None:
         if PUBLISH:
             SITE_BLOG.mkdir(exist_ok=True)
             html = SITE_BLOG / f"{SLUG}.html"
-            shutil.copy2(Path(td) / f"{stem}.html", html)
+            shutil.copy2(rendered, html)
             # quarto links css: files relatively but leaves them out of _files/
             shutil.copy2(REPO / "blog" / "site_theme" / "site.css", SITE_BLOG / "site.css")
             files_dir = SITE_BLOG / f"{SLUG}_files"
@@ -158,9 +158,8 @@ def main() -> None:
             shutil.copytree(Path(td) / f"{stem}_files", files_dir)
             # only ship photos the post references, not everything on disk
             used = {
-                Path(m).name
-                for m in html.read_text().split('src="images/')[1:]
-                for m in [m.split('"', 1)[0]]
+                s.split('"', 1)[0]
+                for s in html.read_text().split('src="images/')[1:]
             }
             (SITE_BLOG / "images").mkdir(exist_ok=True)
             for name in sorted(used):
@@ -170,7 +169,7 @@ def main() -> None:
                   f"+ {n_assets} assets in {files_dir.name}/ + images/ — not deployed")
         else:
             OUT.parent.mkdir(exist_ok=True)
-            (Path(td) / f"{stem}.html").rename(OUT)
+            rendered.rename(OUT)
             print(f"rendered: {OUT} ({OUT.stat().st_size / 1e6:.1f} MB) — title: {title}")
 
 

@@ -8,7 +8,7 @@ after 3 consecutive non-body pages — so we never pay to transcribe a
 
 from cb1 import config
 from cb1.anthropic_client import image_block
-from cb1.pdf_text import page_texts
+from cb1.pdf_text import is_textless, page_texts
 from cb1.rasterize import page_jpeg
 from cb1.segment import classify_page
 
@@ -27,13 +27,12 @@ FRONT_OCR_PAGE_CAP = 40
 
 def run_extract_text(client) -> None:
     """Stage runner: progressive front OCR for every scan-front file."""
-    import json
-
     from cb1.download import load_manifest
+    from cb1.identify import load_meetings
     from cb1.segment import needs_ocr_first, segment_file
 
     manifest = load_manifest()
-    meetings = json.loads((config.DATA_DIR / "meetings.json").read_text())["meetings"]
+    meetings = load_meetings()
     in_meetings = {
         f["sha256"] for m in meetings.values() for f in m["files"]
     }
@@ -52,7 +51,7 @@ def run_extract_text(client) -> None:
 
 
 def ocr_page(pdf_path, sha256: str, page_no: int, client) -> str:
-    cache = config.INTERIM_DIR / "ocr" / f"{sha256}-p{page_no:03d}.txt"
+    cache = config.ocr_text_path(sha256, page_no)
     if cache.exists():
         return cache.read_text()
     text = client.message(
@@ -88,7 +87,7 @@ def progressive_front_ocr(pdf_path, sha256: str, client) -> int:
         if i >= FRONT_OCR_PAGE_CAP or consecutive_non_body >= STOP_AFTER_NON_BODY:
             break
         page_text = t
-        if len(t.strip()) < 20:
+        if is_textless(t):
             page_text = ocr_page(pdf_path, sha256, i, client)
             ocrd += 1
         label, _ = classify_page(page_text)

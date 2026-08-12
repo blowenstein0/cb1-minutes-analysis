@@ -40,6 +40,10 @@ class CostLedger:
     def __init__(self, path: Path | None = None, cap_usd: float | None = None):
         self.path = path or config.COSTS_PATH
         self.cap_usd = cap_usd if cap_usd is not None else config.BUDGET_CAP_USD
+        # Running total, lazily seeded from the file on first read: without
+        # it, every pre-call budget check re-parses the whole ledger
+        # (quadratic across an OCR backfill run).
+        self._total_usd: float | None = None
 
     def record(
         self,
@@ -70,6 +74,8 @@ class CostLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a") as f:
             f.write(json.dumps(entry) + "\n")
+        if self._total_usd is not None:
+            self._total_usd = round(self._total_usd + cost, 6)
         return cost
 
     def entries(self) -> list[dict]:
@@ -79,7 +85,9 @@ class CostLedger:
             return [json.loads(line) for line in f if line.strip()]
 
     def total_usd(self) -> float:
-        return round(sum(e["cost_usd"] for e in self.entries()), 6)
+        if self._total_usd is None:
+            self._total_usd = round(sum(e["cost_usd"] for e in self.entries()), 6)
+        return self._total_usd
 
     def by_stage(self) -> dict[str, dict]:
         agg: dict[str, dict] = defaultdict(

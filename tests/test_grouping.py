@@ -1,25 +1,13 @@
-"""Grouping logic tested against the REAL 138 hrefs scraped from nyc.gov."""
+"""Filename parsing tested against the REAL 138 hrefs scraped from nyc.gov."""
 
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from cb1.grouping import group_files, parse_href
+from cb1.grouping import parse_href
 
 FIXTURE = Path(__file__).parent / "fixtures" / "index_hrefs.txt"
-
-
-@pytest.fixture(scope="module")
-def refs():
-    hrefs = [line.strip() for line in FIXTURE.read_text().splitlines() if line.strip()]
-    assert len(hrefs) == 138
-    return [parse_href(h) for h in hrefs]
-
-
-@pytest.fixture(scope="module")
-def grouped(refs):
-    return group_files(refs)
 
 
 # ---- date parsing: one case per real-world format ----
@@ -111,63 +99,15 @@ def test_doc_type_hint(filename, hint):
     assert parse_href(f"/x/{filename}").doc_type_hint == hint
 
 
-# ---- full-corpus grouping invariants ----
+# ---- full-corpus invariants ----
 
-def test_only_the_five_pages_from_fragments_are_unresolved(grouped):
-    _, unresolved = grouped
-    names = sorted(r.filename for r in unresolved)
-    assert names == [f"Pages-from-Minutes-{i}.pdf" for i in range(1, 6)]
-
-
-def test_every_dated_file_lands_in_a_group(grouped, refs):
-    groups, unresolved = grouped
-    assert sum(len(g.parts) for g in groups) + len(unresolved) == len(refs)
-
-
-def test_multipart_stitch_cases(grouped):
-    groups, _ = grouped
-    by_id = {g.group_id: g for g in groups}
-
-    # plain Part-1 + REVISED Part-2 -> both kept, group marked revised
-    g = by_id["cb1-2025-05-13"]
-    assert [p.part_no for p in g.parts] == [1, 2]
-    assert [p.is_revised for p in g.parts] == [False, True]
-    assert g.is_revised
-
-    # REVISED Part-1 + plain Parts 2-4
-    g = by_id["cb1-2025-10-21"]
-    assert [p.part_no for p in g.parts] == [1, 2, 3, 4]
-    assert [p.is_revised for p in g.parts] == [True, False, False, False]
-
-    # REVISED Parts 1-2 + plain Parts 3-5
-    g = by_id["cb1-2026-05-12"]
-    assert [p.part_no for p in g.parts] == [1, 2, 3, 4, 5]
-
-    # bare trailing part numbers, mixed dirs and casing
-    g = by_id["cb1-2024-12-10"]
-    assert [p.part_no for p in g.parts] == [1, 2, 3]
-
-    # 5 explicit parts
-    g = by_id["cb1-2026-06-09"]
-    assert [p.part_no for p in g.parts] == [1, 2, 3, 4, 5]
-
-
-def test_single_part_meetings_group_alone(grouped):
-    groups, _ = grouped
-    by_id = {g.group_id: g for g in groups}
-    g = by_id["cb1-2023-06-13"]
-    assert len(g.parts) == 1
-    assert g.parts[0].part_no is None
-
-
-def test_year_month_only_groups_exist(grouped):
-    groups, _ = grouped
-    by_id = {g.group_id: g for g in groups}
-    assert len(by_id["cb1-2016-01"].parts) == 1  # jan2016.pdf
-    assert len(by_id["cb1-2021-11"].parts) == 1  # minutes-202111.pdf
-
-
-def test_group_count_in_expected_range(grouped):
-    groups, _ = grouped
-    # ~110 logical meetings from 138 files
-    assert 100 <= len(groups) <= 120
+def test_all_corpus_hrefs_parse():
+    hrefs = [line.strip() for line in FIXTURE.read_text().splitlines() if line.strip()]
+    assert len(hrefs) == 138
+    refs = [parse_href(h) for h in hrefs]
+    # the five undated fragments are the only files with no date hint at all;
+    # the identify stage places them by page-1 content
+    undated = sorted(
+        r.filename for r in refs if not r.date_guess and not r.year_month_guess
+    )
+    assert undated == [f"Pages-from-Minutes-{i}.pdf" for i in range(1, 6)]

@@ -42,6 +42,34 @@ CREATE OR REPLACE TABLE cannabis (
 
 TABLES = ("meetings", "licenses", "votes", "speakers", "incidents", "cannabis")
 
+# extraction-JSON key -> (table, columns in DDL order, after meeting_id)
+RECORD_INSERTS = {
+    "liquor_licenses": ("licenses", (
+        "applicant_name", "dba", "address", "application_type", "license_class",
+        "features", "committee_recommendation", "board_action", "source_snippet",
+    )),
+    "votes": ("votes", (
+        "motion_text", "topic_category", "mover", "seconder", "yes", "no",
+        "abstain", "recusal", "outcome", "unanimous", "conditions", "source_snippet",
+    )),
+    "public_speakers": ("speakers", (
+        "name", "affiliation", "topic", "position", "source_snippet",
+    )),
+    "traffic_incidents": ("incidents", (
+        "victim_name", "incident_date", "location", "severity", "source_snippet",
+    )),
+    "cannabis_licenses": ("cannabis", (
+        "applicant_name", "address", "application_type", "source_snippet",
+    )),
+}
+
+
+def _insert(con, table: str, cols: tuple, mid: str, record: dict) -> None:
+    con.execute(
+        f"INSERT INTO {table} VALUES ({','.join('?' * (len(cols) + 1))})",
+        [mid] + [record.get(c) for c in cols],
+    )
+
 
 def load_db(extracted_dir: Path | None = None, db_path: Path | None = None) -> dict:
     extracted_dir = extracted_dir or config.EXTRACTED_DIR
@@ -68,40 +96,9 @@ def load_db(extracted_dir: Path | None = None, db_path: Path | None = None) -> d
                 meta["output_tokens"], meta["cost_usd"], meta.get("warnings", []),
             ],
         )
-        for r in d.get("liquor_licenses", []):
-            con.execute(
-                "INSERT INTO licenses VALUES (?,?,?,?,?,?,?,?,?,?)",
-                [mid, r["applicant_name"], r.get("dba"), r["address"],
-                 r["application_type"], r.get("license_class"), r.get("features", []),
-                 r.get("committee_recommendation"), r.get("board_action"),
-                 r["source_snippet"]],
-            )
-        for r in d.get("votes", []):
-            con.execute(
-                "INSERT INTO votes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [mid, r["motion_text"], r["topic_category"], r.get("mover"),
-                 r.get("seconder"), r["yes"], r["no"], r["abstain"], r["recusal"],
-                 r["outcome"], r.get("unanimous", False), r.get("conditions", []),
-                 r["source_snippet"]],
-            )
-        for r in d.get("public_speakers", []):
-            con.execute(
-                "INSERT INTO speakers VALUES (?,?,?,?,?,?)",
-                [mid, r.get("name"), r.get("affiliation"), r["topic"],
-                 r["position"], r["source_snippet"]],
-            )
-        for r in d.get("traffic_incidents", []):
-            con.execute(
-                "INSERT INTO incidents VALUES (?,?,?,?,?,?)",
-                [mid, r.get("victim_name"), r.get("incident_date"), r["location"],
-                 r["severity"], r["source_snippet"]],
-            )
-        for r in d.get("cannabis_licenses", []):
-            con.execute(
-                "INSERT INTO cannabis VALUES (?,?,?,?,?)",
-                [mid, r["applicant_name"], r["address"], r["application_type"],
-                 r["source_snippet"]],
-            )
+        for key, (table, cols) in RECORD_INSERTS.items():
+            for r in d.get(key, []):
+                _insert(con, table, cols, mid, r)
 
     overrides_path = config.DATA_DIR / "vote_overrides.json"
     if overrides_path.exists():
@@ -112,15 +109,10 @@ def load_db(extracted_dir: Path | None = None, db_path: Path | None = None) -> d
             e for e in json.loads(overrides_path.read_text())["add"]
             if e["meeting_id"] in loaded
         ]
+        table, cols = RECORD_INSERTS["votes"]
         for e in entries:
             r = Vote.model_validate(e["vote"]).model_dump()
-            con.execute(
-                "INSERT INTO votes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                [e["meeting_id"], r["motion_text"], r["topic_category"],
-                 r["mover"], r["seconder"], r["yes"], r["no"], r["abstain"],
-                 r["recusal"], r["outcome"], r["unanimous"], r["conditions"],
-                 r["source_snippet"]],
-            )
+            _insert(con, table, cols, e["meeting_id"], r)
         print(f"load-db: applied {len(entries)} vote overrides")
 
     counts = {}

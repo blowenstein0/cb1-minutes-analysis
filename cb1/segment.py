@@ -20,7 +20,7 @@ import json
 import re
 
 from cb1 import config
-from cb1.pdf_text import page_texts
+from cb1.pdf_text import is_textless, page_texts
 
 BODY_KEYWORDS = (
     "motion", "seconded", "vote was", "adjourn", "roll call", "committee",
@@ -116,34 +116,46 @@ def needs_ocr_first(texts: list[str]) -> bool:
     scanned attachments and are never OCR'd.
     """
     front = texts[:3]
-    if front and all(len(t.strip()) < 20 for t in front):
+    if front and all(is_textless(t) for t in front):
         return True
-    textless = sum(1 for t in texts if len(t.strip()) < 20)
+    textless = sum(1 for t in texts if is_textless(t))
     return textless / max(len(texts), 1) > 0.8
+
+
+def merged_page_texts(pdf_path, sha256: str) -> tuple[list[str], list[bool]]:
+    """Page texts with vision-OCR transcripts overlaid on textless pages.
+
+    Returns (texts, from_ocr flags). The single source of truth for "which
+    text does a page actually have" — segmentation and extraction must agree.
+    """
+    texts = page_texts(pdf_path, sha256)
+    merged, from_ocr = [], []
+    for i, t in enumerate(texts):
+        ocr_file = config.ocr_text_path(sha256, i)
+        if is_textless(t) and ocr_file.exists():
+            merged.append(ocr_file.read_text())
+            from_ocr.append(True)
+        else:
+            merged.append(t)
+            from_ocr.append(False)
+    return merged, from_ocr
 
 
 def segment_file(pdf_path, sha256: str) -> dict:
     """Classify every page of one file. Cached by sha."""
     cache = config.INTERIM_DIR / "segments" / f"{sha256}.json"
-    ocr_dir = config.INTERIM_DIR / "ocr"
 
     texts = page_texts(pdf_path, sha256)
-    # overlay vision-OCR transcripts where the text layer was empty
-    ocr_pages = 0
-    merged = []
-    for i, t in enumerate(texts):
-        ocr_file = ocr_dir / f"{sha256}-p{i:03d}.txt"
-        if len(t.strip()) < 20 and ocr_file.exists():
-            merged.append(ocr_file.read_text())
-            ocr_pages += 1
-        else:
-            merged.append(t)
-
+    ocr_pages = sum(
+        1 for i, t in enumerate(texts)
+        if is_textless(t) and config.ocr_text_path(sha256, i).exists()
+    )
     if cache.exists():
         cached = json.loads(cache.read_text())
         if cached.get("ocr_pages") == ocr_pages:  # re-segment if new OCR landed
             return cached
 
+    merged, _ = merged_page_texts(pdf_path, sha256)
     result = {
         "needs_ocr_first": needs_ocr_first(texts) and ocr_pages == 0,
         "ocr_pages": ocr_pages,
@@ -155,3 +167,16 @@ def segment_file(pdf_path, sha256: str) -> dict:
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(result))
     return result
+
+
+def run_segment() -> None:
+    """Stage runner: segment every downloaded file, print the summary."""
+    from cb1.download import load_manifest
+
+    manifest = load_manifest()
+    n_body = n_flagged = 0
+    for href, e in sorted(manifest.items()):
+        seg = segment_file(config.RAW_DIR / e["local"], e["sha256"])
+        n_body += len(seg["body_pages"])
+        n_flagged += seg["needs_ocr_first"]
+    print(f"segment: {n_body} body pages; {n_flagged} files still need OCR first")

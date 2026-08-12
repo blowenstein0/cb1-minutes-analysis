@@ -1,7 +1,4 @@
-"""CLI entrypoints, one subcommand per pipeline stage.
-
-Stages land phase by phase; unimplemented ones exit with a message.
-"""
+"""CLI entrypoints, one subcommand per pipeline stage."""
 
 import argparse
 import sys
@@ -57,19 +54,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.stage == "segment":
-        import json as _json
+        from cb1.segment import run_segment
 
-        from cb1 import config
-        from cb1.download import load_manifest
-        from cb1.segment import segment_file
-
-        manifest = load_manifest()
-        n_body = n_flagged = 0
-        for href, e in sorted(manifest.items()):
-            seg = segment_file(config.RAW_DIR / e["local"], e["sha256"])
-            n_body += len(seg["body_pages"])
-            n_flagged += seg["needs_ocr_first"]
-        print(f"segment: {n_body} body pages; {n_flagged} files still need OCR first")
+        run_segment()
         return 0
 
     if args.stage == "extract-structured":
@@ -94,9 +81,6 @@ def main(argv: list[str] | None = None) -> int:
 
         load_db()
         return 0
-
-    print(f"stage {args.stage!r} not implemented yet (see PLAN.md build phases)")
-    return 1
 
 
 if __name__ == "__main__":

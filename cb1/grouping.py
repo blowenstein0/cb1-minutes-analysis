@@ -1,8 +1,8 @@
-"""Parse minutes filenames and group multi-part files into logical meetings.
+"""Parse minutes filenames: date, part number, revised flag, doc-type hint.
 
 Filename dates are HINTS, not truth — the identify stage derives the
-canonical date from page-1 content. But filename parsing does the initial
-grouping and lets us cross-check content dates later.
+canonical date from page-1 content and does the grouping; filename parsing
+supplies the hints and lets us cross-check content dates.
 
 Real-world formats this handles (all present in tests/fixtures/index_hrefs.txt):
   jan2016.pdf                          month-abbrev + year, no day
@@ -18,7 +18,7 @@ Real-world formats this handles (all present in tests/fixtures/index_hrefs.txt):
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 MONTHS = {
@@ -65,16 +65,6 @@ class FileRef:
     part_no: int | None
     is_revised: bool
     doc_type_hint: str  # combined|public_hearing|special|committee|unknown
-
-
-@dataclass
-class MeetingGroup:
-    group_id: str  # provisional: cb1-YYYY-MM-DD or cb1-YYYY-MM
-    date_guess: date | None
-    year_month_guess: tuple[int, int] | None
-    parts: list[FileRef] = field(default_factory=list)  # stitch order
-    is_revised: bool = False
-    warnings: list[str] = field(default_factory=list)
 
 
 def parse_date(stem: str) -> tuple[date | None, tuple[int, int] | None, tuple[int, int]]:
@@ -164,56 +154,3 @@ def parse_href(href: str) -> FileRef:
         is_revised="revised" in stem.lower() or bool(re.search(r"[-_]rev$", stem.lower())),
         doc_type_hint=parse_doc_type(stem),
     )
-
-
-def group_files(refs: list[FileRef]) -> tuple[list[MeetingGroup], list[FileRef]]:
-    """Group by filename date. Returns (groups, unresolved).
-
-    Unresolved = no date and no year-month in the filename; the identify
-    stage places these by page-1 content.
-    """
-    buckets: dict[object, list[FileRef]] = {}
-    unresolved: list[FileRef] = []
-    for r in refs:
-        if r.date_guess:
-            buckets.setdefault(r.date_guess, []).append(r)
-        elif r.year_month_guess:
-            buckets.setdefault(r.year_month_guess, []).append(r)
-        else:
-            unresolved.append(r)
-
-    groups: list[MeetingGroup] = []
-    for key, members in buckets.items():
-        # Same (date, part) uploaded plain AND revised -> keep the revision.
-        by_part: dict[int | None, FileRef] = {}
-        warnings: list[str] = []
-        for r in members:
-            cur = by_part.get(r.part_no)
-            if cur is None:
-                by_part[r.part_no] = r
-            elif r.is_revised and not cur.is_revised:
-                by_part[r.part_no] = r
-                warnings.append(f"kept revised over plain for part={r.part_no}")
-            elif cur.is_revised and not r.is_revised:
-                warnings.append(f"kept revised over plain for part={r.part_no}")
-            else:
-                warnings.append(f"duplicate upload for part={r.part_no}: {r.filename}")
-        parts = sorted(by_part.values(), key=lambda r: (r.part_no is None, r.part_no or 0))
-        if None in by_part and len(by_part) > 1:
-            warnings.append("group mixes a no-part file with numbered parts")
-        if isinstance(key, date):
-            gid, dg, ymg = f"cb1-{key.isoformat()}", key, None
-        else:
-            gid, dg, ymg = f"cb1-{key[0]}-{key[1]:02d}", None, key
-        groups.append(
-            MeetingGroup(
-                group_id=gid,
-                date_guess=dg,
-                year_month_guess=ymg,
-                parts=parts,
-                is_revised=any(r.is_revised for r in parts),
-                warnings=warnings,
-            )
-        )
-    groups.sort(key=lambda g: g.group_id)
-    return groups, unresolved

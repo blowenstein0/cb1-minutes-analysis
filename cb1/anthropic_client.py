@@ -104,11 +104,10 @@ class Client:
 
         Bedrock has no Message Batches API (its batch inference is an
         S3/CreateModelInvocationJob flow — not worth the plumbing at this
-        corpus size), so on that backend this degrades to sequential
-        synchronous calls at list price.
+        corpus size); callers run per-meeting sync calls on that backend.
         """
         if self.backend == "bedrock":
-            return self._batch_sync_fallback(stage, requests)
+            raise RuntimeError("no Message Batches API on bedrock — use sync calls")
         self.ledger.check_budget()
         batch = self._client.messages.batches.create(requests=requests)
         print(f"batch {batch.id}: {len(requests)} requests submitted")
@@ -145,29 +144,6 @@ class Client:
                 }
             else:
                 out[r.custom_id] = {"text": None, "usage": {}, "error": r.result.type}
-        return out
-
-    def _batch_sync_fallback(self, stage: str, requests: list[dict]) -> dict:
-        print(f"bedrock backend: running {len(requests)} requests sequentially")
-        out: dict = {}
-        for i, req in enumerate(requests, 1):
-            p = req["params"]
-            try:
-                text = self.message(
-                    stage=stage,
-                    messages=p["messages"],
-                    system=p.get("system"),
-                    max_tokens=p.get("max_tokens", 4096),
-                    temperature=p.get("temperature", 0.0),
-                    meeting=req["custom_id"],
-                    model=p.get("model", config.MODEL),
-                )
-                out[req["custom_id"]] = {
-                    "text": text, "usage": dict(self.last_usage), "error": None,
-                }
-            except anthropic.APIStatusError as e:
-                out[req["custom_id"]] = {"text": None, "usage": {}, "error": str(e)}
-            print(f"  [{i}/{len(requests)}] {req['custom_id']}")
         return out
 
 

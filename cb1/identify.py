@@ -14,9 +14,11 @@ import re
 from datetime import date
 
 from cb1 import config
+from cb1.anthropic_client import image_block
 from cb1.download import load_manifest
 from cb1.grouping import MONTHS, FileRef, parse_href
-from cb1.pdf_text import is_low_density, page_texts
+from cb1.models import strip_fences
+from cb1.pdf_text import page_texts
 from cb1.rasterize import page_jpeg
 
 MONTH_ALT = (
@@ -114,7 +116,6 @@ def identify_file(path, sha256: str, client=None) -> dict:
         "date": d.isoformat() if d else None,
         "meeting_type": mtype,
         "method": "text",
-        "page1_low_density": is_low_density(page1),
     }
 
     if d is None and client is not None:
@@ -124,7 +125,7 @@ def identify_file(path, sha256: str, client=None) -> dict:
                 {
                     "role": "user",
                     "content": [
-                        _image(path, sha256),
+                        image_block(page_jpeg(path, sha256, 0)),
                         {"type": "text", "text": VISION_IDENTIFY_PROMPT},
                     ],
                 }
@@ -132,7 +133,7 @@ def identify_file(path, sha256: str, client=None) -> dict:
             max_tokens=200,
         )
         try:
-            parsed = json.loads(_strip_fences(raw))
+            parsed = json.loads(strip_fences(raw))
             result["date"] = parsed.get("date")
             result["meeting_type"] = parsed.get("meeting_type") or mtype
             result["method"] = "vision"
@@ -144,16 +145,9 @@ def identify_file(path, sha256: str, client=None) -> dict:
     return result
 
 
-def _image(path, sha256: str) -> dict:
-    from cb1.anthropic_client import image_block
-
-    return image_block(page_jpeg(path, sha256, 0))
-
-
-def _strip_fences(raw: str) -> str:
-    raw = raw.strip()
-    raw = re.sub(r"^```(json)?\s*", "", raw)
-    return re.sub(r"\s*```$", "", raw)
+def _hint_or_combined(ref: FileRef) -> str:
+    """Filename hints are precise where present; default meeting type otherwise."""
+    return ref.doc_type_hint if ref.doc_type_hint != "unknown" else "combined"
 
 
 def resolve_file(ref: FileRef, content: dict) -> dict:
@@ -190,6 +184,11 @@ def resolve_file(ref: FileRef, content: dict) -> dict:
     }
 
 
+def load_meetings() -> dict:
+    """Read the canonical meetings manifest this stage writes."""
+    return json.loads((config.DATA_DIR / "meetings.json").read_text())["meetings"]
+
+
 def run_identify(client=None) -> dict:
     """Identify every downloaded file and write the canonical meetings manifest."""
     config.ensure_dirs()
@@ -212,7 +211,7 @@ def run_identify(client=None) -> dict:
                 "date": ov["date"],
                 "date_source": "override",
                 "date_confidence": 1.0,
-                "meeting_type": ref.doc_type_hint if ref.doc_type_hint != "unknown" else "combined",
+                "meeting_type": _hint_or_combined(ref),
                 "warnings": [f"date overridden: {ov['reason'][:120]}"],
             }
         elif ref.part_no is not None and ref.part_no >= 2 and ref.date_guess:
@@ -222,7 +221,7 @@ def run_identify(client=None) -> dict:
                 "date": ref.date_guess.isoformat(),
                 "date_source": "filename",
                 "date_confidence": 0.9,
-                "meeting_type": ref.doc_type_hint if ref.doc_type_hint != "unknown" else "combined",
+                "meeting_type": _hint_or_combined(ref),
                 "warnings": [],
             }
         elif ref.part_no is not None and ref.part_no >= 2:
@@ -302,11 +301,10 @@ def run_identify(client=None) -> dict:
             cur = by_part.get(f["part_no"])
             if cur is None or (f["is_revised"] and not cur["is_revised"]):
                 by_part[f["part_no"]] = f
-            elif not f["is_revised"] and cur["is_revised"]:
-                pass
-            elif f is not cur:
-                # A same-date, same-part collision usually means content
-                # identify misread one file. NEVER drop silently: surface it.
+            elif f["is_revised"] == cur["is_revised"]:
+                # Neither side wins on revision status: a same-date, same-part
+                # collision usually means content identify misread one file.
+                # NEVER drop silently: surface it.
                 m["warnings"].append(f"duplicate part={f['part_no']}: {f['local']}")
                 print(
                     f"WARNING: {f['local']} collides with {cur['local']} at "

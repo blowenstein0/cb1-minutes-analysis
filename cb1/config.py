@@ -56,12 +56,15 @@ USER_AGENT = (
 DOWNLOAD_DELAY_S = 1.0
 
 RASTER_DPI = 150
-# Pages with fewer chars/page than this from the text layer get flagged
-# for vision OCR.
-MIN_TEXT_DENSITY_CHARS = 200
 
 SCHEMA_VERSION = "1.0"
 PROMPT_VERSION = "1.0"
+
+
+def ocr_text_path(sha256: str, page_no: int) -> Path:
+    """Per-page OCR transcript cache. The -pNNN convention is load-bearing:
+    a mismatch is a silent cache miss, not an error."""
+    return INTERIM_DIR / "ocr" / f"{sha256}-p{page_no:03d}.txt"
 
 
 def ensure_dirs() -> None:

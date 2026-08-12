@@ -7,19 +7,19 @@ validation-failure retries run synchronously afterwards.
 """
 
 import json
-import re
 
 from pydantic import ValidationError
 
 from cb1 import config
+from cb1.identify import load_meetings
 from cb1.models import (
     ExtractionMeta,
     LLMExtraction,
     MeetingExtraction,
     format_validation_error,
+    strip_fences,  # noqa: F401  (canonical import point for LLM-response helpers)
 )
-from cb1.pdf_text import page_texts
-from cb1.segment import segment_file
+from cb1.segment import merged_page_texts, segment_file
 
 MAX_BODY_CHARS = 350_000  # ~90k tokens; chunk above this (Haiku ctx is 200k)
 MAX_OUTPUT_TOKENS = 32_000  # license-heavy meetings overflow 16k and truncate mid-JSON
@@ -49,15 +49,10 @@ def build_meeting_text(meeting: dict) -> tuple[str, dict]:
     for f in meeting["files"]:
         path = config.RAW_DIR / f["local"]
         seg = segment_file(path, f["sha256"])
-        texts = page_texts(path, f["sha256"])
-        ocr_dir = config.INTERIM_DIR / "ocr"
+        merged, from_ocr = merged_page_texts(path, f["sha256"])
         for i in seg["body_pages"]:
-            text = texts[i]
-            ocr_file = ocr_dir / f"{f['sha256']}-p{i:03d}.txt"
-            if len(text.strip()) < 20 and ocr_file.exists():
-                text = ocr_file.read_text()
-                stats["ocr_pages"] += 1
-            chunks.append(f"=== {f['local']} page {i + 1} ===\n{text.strip()}")
+            stats["ocr_pages"] += from_ocr[i]
+            chunks.append(f"=== {f['local']} page {i + 1} ===\n{merged[i].strip()}")
         stats["pages_body"] += len(seg["body_pages"])
         stats["pages_dropped"] += len(seg["pages"]) - len(seg["body_pages"])
     return "\n\n".join(chunks), stats
@@ -70,12 +65,6 @@ def build_user_prompt(meeting: dict, body_text: str) -> str:
         f"meeting_type: {meeting['meeting_type']}\n\n"
         f"MINUTES BODY TEXT:\n\n{body_text}"
     )
-
-
-def strip_fences(raw: str) -> str:
-    raw = raw.strip()
-    raw = re.sub(r"^```(json)?\s*", "", raw)
-    return re.sub(r"\s*```$", "", raw)
 
 
 def parse_llm_extraction(raw: str) -> LLMExtraction:
@@ -93,9 +82,16 @@ def system_blocks() -> list[dict]:
     ]
 
 
-def extract_meeting_sync(meeting: dict, client) -> MeetingExtraction:
-    """Synchronous extract + validate, one retry with error feedback."""
-    body_text, stats = build_meeting_text(meeting)
+def extract_meeting_sync(
+    meeting: dict, client, body_text: str | None = None, stats: dict | None = None
+) -> MeetingExtraction:
+    """Synchronous extract + validate, one retry with error feedback.
+
+    body_text/stats may be passed pre-built (the stage runner already has
+    them); otherwise they are computed here.
+    """
+    if body_text is None:
+        body_text, stats = build_meeting_text(meeting)
     if len(body_text) > MAX_BODY_CHARS:
         body_text = body_text[:MAX_BODY_CHARS]
         stats["truncated"] = True
@@ -111,21 +107,27 @@ def extract_meeting_sync(meeting: dict, client) -> MeetingExtraction:
     try:
         llm = parse_llm_extraction(raw)
     except ValidationError as e:
-        retry_msg = format_validation_error(raw, e)
-        raw2 = client.message(
-            stage="extract_retry",
-            system=system_blocks(),
-            messages=[
-                {"role": "user", "content": user},
-                {"role": "assistant", "content": raw},
-                {"role": "user", "content": retry_msg},
-            ],
-            max_tokens=MAX_OUTPUT_TOKENS,
-            meeting=meeting["meeting_id"],
-        )
-        llm = parse_llm_extraction(raw2)  # second failure raises: surfaced, not hidden
-
+        return _retry_with_feedback(meeting, user, raw, e, client, stats)
     return finalize(meeting, llm, stats)
+
+
+def _retry_with_feedback(
+    meeting: dict, user: str, raw: str, error: ValidationError, client, stats: dict
+) -> MeetingExtraction:
+    """One retry feeding the validation error back; a second failure raises
+    out of parse_llm_extraction — surfaced, not hidden."""
+    raw2 = client.message(
+        stage="extract_retry",
+        system=system_blocks(),
+        messages=[
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": format_validation_error(raw, error)},
+        ],
+        max_tokens=MAX_OUTPUT_TOKENS,
+        meeting=meeting["meeting_id"],
+    )
+    return finalize(meeting, parse_llm_extraction(raw2), stats)
 
 
 def text_source_for(meeting: dict, stats: dict) -> str:
@@ -203,8 +205,7 @@ def save(extraction: MeetingExtraction, usage: dict | None = None) -> None:
     )
 
 
-def batch_request(meeting: dict) -> dict:
-    body_text, _ = build_meeting_text(meeting)
+def batch_request(meeting: dict, body_text: str) -> dict:
     return {
         "custom_id": meeting["meeting_id"],
         "params": {
@@ -221,17 +222,17 @@ def batch_request(meeting: dict) -> dict:
 
 def run_extract_structured(client, sync: bool = False, only: list[str] | None = None) -> None:
     """Stage runner. Batch by default; --sync for dev/eval single meetings."""
-    meetings = json.loads((config.DATA_DIR / "meetings.json").read_text())["meetings"]
-    todo = []
+    meetings = load_meetings()
+    todo = []  # (meeting, body_text, stats)
     skipped_empty = 0
     for mid, m in sorted(meetings.items()):
         if already_extracted(mid) or (only is not None and mid not in only):
             continue
-        body_text, _ = build_meeting_text(m)  # cached page/segment reads
+        body_text, stats = build_meeting_text(m)
         if not body_text.strip():
             skipped_empty += 1  # scan-era meeting whose OCR hasn't run yet
             continue
-        todo.append(m)
+        todo.append((m, body_text, stats))
     print(f"extract-structured: {len(todo)} meetings to extract "
           f"({len(meetings) - len(todo) - skipped_empty} done, "
           f"{skipped_empty} skipped pending OCR)")
@@ -239,16 +240,16 @@ def run_extract_structured(client, sync: bool = False, only: list[str] | None = 
         return
 
     if getattr(client, "backend", "") == "bedrock":
-        # The bedrock batch fallback is sequential anyway; the per-meeting
-        # sync path saves after each meeting, so an interrupted run resumes
-        # instead of losing paid results held in memory.
+        # Bedrock has no Message Batches API; the per-meeting sync path
+        # saves after each meeting, so an interrupted run resumes instead
+        # of losing paid results held in memory.
         sync = True
 
     if sync:
         failed = []
-        for m in todo:
+        for m, body_text, stats in todo:
             try:
-                ex = extract_meeting_sync(m, client)
+                ex = extract_meeting_sync(m, client, body_text, stats)
             except Exception as e:
                 # validation failed twice, or network trouble that survived
                 # the client's retries: skip this meeting, keep the run alive.
@@ -267,21 +268,21 @@ def run_extract_structured(client, sync: bool = False, only: list[str] | None = 
             print(f"extract-structured: {len(failed)} meetings failed: {failed}")
         return
 
-    results = client.batch("extract", [batch_request(m) for m in todo])
-    for m in todo:
+    results = client.batch("extract", [batch_request(m, body) for m, body, _ in todo])
+    for m, body_text, stats in todo:
         mid = m["meeting_id"]
         r = results.get(mid, {"text": None, "error": "missing from batch results"})
         if r["text"] is None:
             print(f"  {mid}: batch error ({r['error']}), retrying sync")
-            ex = extract_meeting_sync(m, client)
+            ex = extract_meeting_sync(m, client, body_text, stats)
             save(ex, client.last_usage)
             continue
-        _, stats = build_meeting_text(m)  # cached, cheap
         try:
             llm = parse_llm_extraction(r["text"])
         except ValidationError as e:
             print(f"  {mid}: validation failed, sync retry with feedback")
-            ex = _sync_retry(m, r["text"], e, client)
+            user = build_user_prompt(m, body_text[:MAX_BODY_CHARS])
+            ex = _retry_with_feedback(m, user, r["text"], e, client, stats)
             save(ex, {
                 k: r["usage"].get(k, 0) + client.last_usage.get(k, 0)
                 for k in ("input_tokens", "output_tokens", "cost_usd")
@@ -289,20 +290,3 @@ def run_extract_structured(client, sync: bool = False, only: list[str] | None = 
             continue
         save(finalize(m, llm, stats), r["usage"])
     print(f"extract-structured: done, outputs in {config.EXTRACTED_DIR}")
-
-
-def _sync_retry(meeting: dict, raw: str, error: ValidationError, client) -> MeetingExtraction:
-    body_text, stats = build_meeting_text(meeting)
-    user = build_user_prompt(meeting, body_text[:MAX_BODY_CHARS])
-    raw2 = client.message(
-        stage="extract_retry",
-        system=system_blocks(),
-        messages=[
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content": format_validation_error(raw, error)},
-        ],
-        max_tokens=MAX_OUTPUT_TOKENS,
-        meeting=meeting["meeting_id"],
-    )
-    return finalize(meeting, parse_llm_extraction(raw2), stats)
