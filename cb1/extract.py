@@ -35,7 +35,7 @@ Field-by-field guidance:
 - liquor_licenses: every SLA/liquor item (agenda lists AND narrative). application_type: new|renewal|alteration|corporate_change|transfer|other. Deduplicate: one record per applicant+address per meeting, merging agenda and narrative detail. features: only those explicitly mentioned (e.g. sidewalk_cafe, rooftop, patron_dancing, live_music, third_party_promoters, security_personnel, outdoor_seating, backyard).
 - votes: EVERY motion with a recorded tally. yes/no/abstain/recusal as integers (missing category = 0). "unanimous" language with N members present means yes=N if N is stated. outcome: passed|failed. conditions: stipulations attached to the motion. Vote tallies are the analytical core — transcribe the numbers EXACTLY as written; never infer or arithmetic-correct them.
 - public_speakers: individuals speaking in the public session/hearing, their affiliation if stated, topic, and position (for|against|neutral|unclear).
-- traffic_incidents: any mention of a traffic crash/fatality/injury in the district (victim name if named, location, severity).
+- traffic_incidents: any mention of a traffic crash/fatality/injury in the district (name of the person involved if named, location, severity).
 - cannabis_licenses: cannabis/dispensary applications (CAURD etc.).
 - source_snippet: for EVERY record, a verbatim quote (<=300 chars) from the input text that supports the record. Copy exactly, including OCR errors.
 

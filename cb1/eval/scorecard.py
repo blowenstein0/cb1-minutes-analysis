@@ -20,7 +20,7 @@ COMPARED_FIELDS = {
                         "license_class", "committee_recommendation", "board_action"),
     "votes": ("topic_category", "outcome", "yes", "no", "abstain", "recusal"),
     "public_speakers": ("name", "affiliation", "position"),
-    "traffic_incidents": ("victim_name", "location", "severity"),
+    "traffic_incidents": ("person_name", "location", "severity"),
     "cannabis_licenses": ("applicant_name", "address", "application_type"),
 }
 
@@ -79,7 +79,7 @@ def score_meeting(golden: dict, extracted: dict) -> dict:
 
 
 def _summary(record: dict) -> str:
-    for k in ("applicant_name", "motion_text", "name", "victim_name", "location"):
+    for k in ("applicant_name", "motion_text", "name", "person_name", "location"):
         if record.get(k):
             return str(record[k])[:80]
     return str(record)[:80]

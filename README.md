@@ -28,10 +28,22 @@ votes = pd.read_parquet("data/db/votes.parquet")
 
 Everything is extracted from CB1's publicly posted meeting minutes. Names in
 the dataset (speakers, license applicants, letter writers) appear in that
-public record; every row carries a verbatim `source_snippet` so any value
-can be traced to its source page. Manual corrections are documented in
+public record; every row carries a `source_snippet` so any value can be
+traced to its source page. Manual corrections are documented in
 `data/overrides.json` (dates) and `data/vote_overrides.json` (votes missed
 by extraction, recovered by hand with quotes).
+
+**One exception to verbatim snippets.** People named in the traffic-incident
+record — mostly people killed in crashes — are named by the board without
+having chosen to enter a public process the way speakers and applicants did.
+The published parquet files therefore drop the `incidents.person_name` column
+and replace those names with `[name withheld]` wherever they appear in text,
+including the motions that name them and the speaker rows where relatives
+testified. Locations, dates and severities are untouched, so the traffic
+record is still analysable. Surnames alone are left alone deliberately —
+"Meyer" is inside Havemeyer Street and "Ramirez" names both a park and a
+taqueria. Re-running `make load-db` from the minutes reproduces the full
+names locally; only the shipped exports are redacted.
 
 ## Setup
 

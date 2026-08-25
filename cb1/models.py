@@ -101,7 +101,7 @@ class GovernmentAnnouncement(BaseModel):
 
 
 class TrafficIncident(BaseModel):
-    victim_name: str | None = None
+    person_name: str | None = None
     incident_date: str | None = None
     location: str
     severity: Severity = "other"

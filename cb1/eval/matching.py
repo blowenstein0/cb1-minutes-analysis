@@ -25,7 +25,7 @@ KEY_FNS = {
     "cannabis_licenses": lambda r: normalize(f"{r.get('applicant_name')} {r.get('address')}"),
     "votes": lambda r: normalize(r.get("motion_text")),
     "public_speakers": lambda r: normalize(f"{r.get('name')} {r.get('topic')}"),
-    "traffic_incidents": lambda r: normalize(f"{r.get('victim_name')} {r.get('location')}"),
+    "traffic_incidents": lambda r: normalize(f"{r.get('person_name')} {r.get('location')}"),
 }
 
 
